@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"gotank/libs/yaml"
 	"io/ioutil"
 	"log"
@@ -16,8 +17,13 @@ type config struct {
 func main() {
 	c := config{}
 	readYaml("config.yml", &c)
-	o := Onedrive{c.Download}
-	o.Children(c.DownDir)
+	down := Onedrive{c.Download}
+	fmt.Println(down.Children(c.DownDir))
+
+	up := Onedrive{c.Upload}
+	fmt.Println(up.Children(c.UpDir))
+
+	down.SyncWith(up, c.DownDir, c.UpDir)
 }
 
 func readYaml(filename string, data interface{}) {
