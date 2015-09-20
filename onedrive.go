@@ -187,6 +187,9 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 			return false
 		}
 		if err != nil {
+			if item.Size != size {
+				return false
+			}
 			break
 		}
 	}
