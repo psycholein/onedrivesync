@@ -29,6 +29,19 @@ type Item struct {
 	Folder bool
 }
 
+const chunk = 1024 * 1024 * 10
+
+var (
+	b      bytes.Buffer
+	size   int64
+	found  bool
+	buffer []byte
+)
+
+func init() {
+	buffer = make([]byte, chunk)
+}
+
 func (o Onedrive) submit(s string) (items []Item) {
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", api+s, nil)
@@ -85,13 +98,20 @@ func (o Onedrive) SyncWith(up Onedrive, downDir, upDir string) {
 		return
 	}
 	up.Mkdir(upDir)
-
-	chunk := 1024 * 1024 * 10
-	buffer := make([]byte, chunk)
-	var b bytes.Buffer
-	var size int64
+	upItems := up.Children(upDir)
 
 	for _, item := range items {
+		found = false
+		for _, upItem := range upItems {
+			if upItem.Name == item.Name && upItem.Size == item.Size {
+				found = true
+			}
+		}
+		if found {
+			fmt.Println("Found:", item.Name)
+			continue
+		}
+
 		if item.Folder {
 			fmt.Println("Todo: Create directory and call SyncWith")
 		} else {
