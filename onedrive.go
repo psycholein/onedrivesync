@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -102,20 +103,39 @@ func (o Onedrive) SyncWith(up Onedrive, downDir, upDir string) {
 			defer resp.Body.Close()
 
 			uploadUrl := up.createSession(item.Name, upDir)
+			if len(uploadUrl) == 0 {
+				return
+			}
+			fmt.Println("Upload:", item.Name)
 
-			fmt.Println(uploadUrl)
-
-			size := 1024 * 1024
-			buffer := make([]byte, size)
+			chunk := 1024 * 1024 * 10
+			buffer := make([]byte, chunk)
+			var size int64
 			for {
-				num, err := io.ReadAtLeast(resp.Body, buffer, size)
-				fmt.Println(num, size)
-				if err != nil {
+				num, err := io.ReadAtLeast(resp.Body, buffer, chunk)
+
+				var b bytes.Buffer
+				b.Write(buffer)
+				b.Truncate(num)
+				req, err2 := http.NewRequest("PUT", uploadUrl, &b)
+				if err2 != nil {
+					break
+				}
+
+				r := fmt.Sprintf("bytes %d-%d/%d", size, size+int64(num)-1, item.Size)
+				req.Header.Add("Authorization", "bearer "+up.Token)
+				req.Header.Add("Content-Length", fmt.Sprintf("%d", num))
+				req.Header.Add("Content-Range", r)
+				res, err3 := client.Do(req)
+				if err3 != nil {
+					break
+				}
+				size += int64(num)
+				fmt.Println(size, "from", item.Size, "Status", res.StatusCode)
+				if err != nil || res.StatusCode > 300 {
 					break
 				}
 			}
-			return
-
 		}
 	}
 }
