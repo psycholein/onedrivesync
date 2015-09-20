@@ -7,13 +7,15 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"strings"
+	"time"
 
 	"github.com/Jeffail/gabs"
+	"github.com/pivotal-golang/bytefmt"
 )
 
 const (
-	api = "https://api.onedrive.com/v1.0"
+	api   = "https://api.onedrive.com/v1.0"
+	chunk = 1024 * 1024 * 10
 )
 
 type Onedrive struct {
@@ -29,18 +31,13 @@ type Item struct {
 	Folder bool
 }
 
-const chunk = 1024 * 1024 * 10
-
-var (
-	b      bytes.Buffer
-	size   int64
-	found  bool
-	buffer []byte
-)
-
-func init() {
-	buffer = make([]byte, chunk)
+type Sync struct {
+	item  Item
+	up    Onedrive
+	upDir string
 }
+
+var jobs chan Sync
 
 func (o Onedrive) submit(s string) (items []Item) {
 	client := &http.Client{}
@@ -92,79 +89,109 @@ func (o Onedrive) Children(path string) []Item {
 func (o Onedrive) Mkdir(path string) {
 }
 
-func (o Onedrive) SyncWith(up Onedrive, downDir, upDir string) {
+func (o Onedrive) startJobs(jobCount int) {
+	jobs = make(chan Sync)
+	for i := 0; i < jobCount; i++ {
+		go func() {
+			for job := range jobs {
+				for !o.syncFile(job.up, job.upDir, job.item) {
+					fmt.Println("Upload-Error! Try again in 5 seconds")
+					time.Sleep(5 * time.Second)
+				}
+			}
+		}()
+	}
+}
+
+func (o Onedrive) SyncWith(up Onedrive, downDir, upDir string, jobCount int) {
 	items := o.Children(downDir)
 	if len(items) == 0 {
 		return
 	}
-	up.Mkdir(upDir)
+	if jobCount > 0 {
+		o.startJobs(jobCount)
+	}
+	up.Mkdir(upDir) // TODO
 	upItems := up.Children(upDir)
-
 	for _, item := range items {
-		found = false
-		for _, upItem := range upItems {
-			if upItem.Name == item.Name && upItem.Size == item.Size {
-				found = true
-			}
-		}
-		if found {
-			fmt.Println("Found:", item.Name)
-			continue
-		}
-
 		if item.Folder {
-			fmt.Println("Todo: Create directory and call SyncWith")
+			fmt.Println("Todo: Call SyncWith")
 		} else {
-			client := &http.Client{}
-			req, err := http.NewRequest("GET", item.Link, nil)
-			if err != nil {
-				log.Fatal(err)
-			}
-			req.Header.Add("Authorization", "bearer "+o.Token)
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			uploadUrl := up.createSession(item.Name, upDir)
-			if len(uploadUrl) == 0 {
-				log.Fatal("No Upload-Session")
-			}
-			fmt.Println("Upload:", item.Name)
-
-			size = 0
-			for {
-				num, err := io.ReadAtLeast(resp.Body, buffer, chunk)
-
-				b.Reset()
-				b.Write(buffer)
-				b.Truncate(num)
-				req, err2 := http.NewRequest("PUT", uploadUrl, &b)
-				if err2 != nil {
-					log.Fatal(err2)
-				}
-
-				r := fmt.Sprintf("bytes %d-%d/%d", size, size+int64(num)-1, item.Size)
-				req.Header.Add("Authorization", "bearer "+up.Token)
-				req.Header.Add("Content-Length", fmt.Sprintf("%d", num))
-				req.Header.Add("Content-Range", r)
-				res, err2 := client.Do(req)
-				if err2 != nil {
-					log.Fatal(err2)
-				}
-				res.Body.Close()
-				size += int64(num)
-				fmt.Println(size, "from", item.Size, "Status", res.StatusCode)
-				if err != nil {
-					break
-				}
-				if res.StatusCode >= 400 {
-					log.Fatal("Upload-Error")
+			found := false
+			for _, upItem := range upItems {
+				if upItem.Name == item.Name && upItem.Size == item.Size {
+					found = true
 				}
 			}
-			resp.Body.Close()
+			if found {
+				fmt.Println("Found:", item.Name)
+				continue
+			}
+			jobs <- Sync{up: up, upDir: upDir, item: item}
 		}
 	}
+	if jobCount > 0 {
+		close(jobs)
+	}
+}
+
+func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
+	var b bytes.Buffer
+	var size int64
+	buffer := make([]byte, chunk)
+
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", item.Link, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	req.Header.Add("Authorization", "bearer "+o.Token)
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	uploadUrl := up.createSession(item.Name, upDir)
+	if len(uploadUrl) == 0 {
+		log.Fatal("No Upload-Session")
+	}
+	fmt.Println("Upload:", item.Name)
+
+	for {
+		num, err := io.ReadAtLeast(resp.Body, buffer, chunk)
+
+		b.Reset()
+		b.Write(buffer)
+		b.Truncate(num)
+		req, err2 := http.NewRequest("PUT", uploadUrl, &b)
+		if err2 != nil {
+			log.Fatal(err2)
+		}
+
+		r := fmt.Sprintf("bytes %d-%d/%d", size, size+int64(num)-1, item.Size)
+		req.Header.Add("Authorization", "bearer "+up.Token)
+		req.Header.Add("Content-Length", fmt.Sprintf("%d", num))
+		req.Header.Add("Content-Range", r)
+		res, err2 := client.Do(req)
+		if err2 != nil {
+			log.Fatal(err2)
+		}
+		res.Body.Close()
+
+		size += int64(num)
+		from := bytefmt.ByteSize(uint64(size))
+		to := bytefmt.ByteSize(uint64(item.Size))
+		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.Name)
+		if res.StatusCode >= 400 {
+			return false
+		}
+		if err != nil {
+			break
+		}
+	}
+	fmt.Println(item.Name, "uploaded!")
+	return true
 }
 
 func (o Onedrive) createSession(name, dir string) (url string) {
@@ -187,30 +214,6 @@ func (o Onedrive) createSession(name, dir string) (url string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	url, _ = jsonParsed.Path("uploadUrl").Data().(string)
 	return
-}
-
-// only Preview
-func (o Onedrive) RemoteDownload(post, uri, name string) {
-	dummy := "{\"@content.sourceUrl\": \"%s\", \"name\": \"%s\", \"file\": {}}"
-	body := strings.NewReader(fmt.Sprintf(dummy, uri, name))
-
-	client := &http.Client{}
-	req, err := http.NewRequest("POST", post, body)
-	if err != nil {
-		log.Fatal(err)
-	}
-	req.Header.Add("Authorization", "bearer "+o.Token)
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Prefer", "respond-async")
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer resp.Body.Close()
-	status, err := ioutil.ReadAll(resp.Body)
-
-	fmt.Println(string(status))
 }

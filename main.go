@@ -25,7 +25,7 @@ func main() {
 
 	down := Onedrive{downToken}
 	up := Onedrive{upToken}
-	down.SyncWith(up, c.DownDir, c.UpDir)
+	down.SyncWith(up, c.DownDir, c.UpDir, 3)
 }
 
 func getToken(clientid, secret, msg string) string {
