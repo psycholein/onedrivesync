@@ -205,12 +205,13 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.name)
 		if err != nil || res.StatusCode >= 400 {
 			if item.size > size || res.StatusCode >= 400 {
-				tries++
 				fmt.Println("Error:", err, body)
+				resp.Body.Close()
 				resp, size = o.resume(up, upDir, item)
 				if size == 0 {
 					return false
 				}
+				tries++
 				continue
 			}
 			break
