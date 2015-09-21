@@ -203,19 +203,10 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		from := bytefmt.ByteSize(uint64(size))
 		to := bytefmt.ByteSize(uint64(item.size))
 		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.name)
-		if res.StatusCode >= 400 {
-			tries++
-			fmt.Println("Resume:", item.name, "Code:", res.StatusCode, "Body:", string(body))
-			resp, size = o.resume(up, upDir, item)
-			if size == 0 {
-				return false
-			}
-			continue
-		}
-		if err != nil {
-			if item.size > size {
+		if err != nil || res.StatusCode >= 400 {
+			if item.size > size || res.StatusCode >= 400 {
 				tries++
-				fmt.Println("Error:", err, num, size)
+				fmt.Println("Error:", err, body)
 				resp, size = o.resume(up, upDir, item)
 				if size == 0 {
 					return false
