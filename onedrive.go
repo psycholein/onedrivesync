@@ -140,17 +140,17 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 
 	req, err := http.NewRequest("GET", item.Link, nil)
 	if err != nil {
-		log.Fatal(err)
+		return false
 	}
 	resp, err := o.Client.Do(req)
 	if err != nil {
-		log.Fatal(err)
+		return false
 	}
 	defer resp.Body.Close()
 
-	uploadUrl := up.createSession(item.Name, upDir)
-	if len(uploadUrl) == 0 {
-		log.Fatal("No Upload-Session")
+	uploadUrl, err := up.createSession(item.Name, upDir)
+	if err != nil || len(uploadUrl) == 0 {
+		return false
 	}
 	fmt.Println("Upload:", item.Name)
 
@@ -162,7 +162,7 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 		b.Truncate(num)
 		req, err2 := http.NewRequest("PUT", uploadUrl, &b)
 		if err2 != nil {
-			log.Fatal(err2)
+			return false
 		}
 
 		r := fmt.Sprintf("bytes %d-%d/%d", size, size+int64(num)-1, item.Size)
@@ -170,7 +170,7 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 		req.Header.Add("Content-Range", r)
 		res, err2 := up.Client.Do(req)
 		if err2 != nil {
-			log.Fatal(err2)
+			return false
 		}
 		res.Body.Close()
 
@@ -194,24 +194,24 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 	return true
 }
 
-func (o Onedrive) createSession(name, dir string) (url string) {
+func (o Onedrive) createSession(name, dir string) (string, error) {
 	uri := api + "/drive/root:" + dir + "/" + name + ":/upload.createSession"
 	req, err := http.NewRequest("POST", uri, nil)
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
 	req.Header.Add("Content-Type", "application/json")
 	resp, err := o.Client.Do(req)
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
 	defer resp.Body.Close()
 	result, err := ioutil.ReadAll(resp.Body)
 
 	jsonParsed, err := gabs.ParseJSON(result)
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
-	url, _ = jsonParsed.Path("uploadUrl").Data().(string)
-	return
+	url, _ := jsonParsed.Path("uploadUrl").Data().(string)
+	return url, nil
 }
