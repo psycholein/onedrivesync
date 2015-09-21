@@ -7,6 +7,8 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
@@ -204,14 +206,20 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		if res.StatusCode >= 400 {
 			tries++
 			fmt.Println("Resume:", item.name, "Code:", res.StatusCode, "Body:", string(body))
-			resp = o.get(item.link, fmt.Sprintf("bytes=%d-%d", size, item.size-1))
+			resp, size = o.resume(up, upDir, item)
+			if size == 0 {
+				return false
+			}
 			continue
 		}
 		if err != nil {
 			if item.size > size {
 				tries++
 				fmt.Println("Error:", err, num, size)
-				resp = o.get(item.link, fmt.Sprintf("bytes=%d-%d", size, item.size-1))
+				resp, size = o.resume(up, upDir, item)
+				if size == 0 {
+					return false
+				}
 				continue
 			}
 			break
@@ -220,6 +228,25 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 	}
 	fmt.Println(item.name, "uploaded!")
 	return true
+}
+
+func (o *onedrive) resume(up *onedrive, url string, item onedriveItem) (*http.Response, int64) {
+	resp := up.get(url, "")
+	body, _ := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	re := regexp.MustCompile("\\[\\\"([0-9]*)\\-")
+	pos := re.FindSubmatch(body)
+	if pos == nil {
+		return nil, 0
+	}
+	size, err := strconv.ParseInt(string(pos[1]), 10, 64)
+	if err != nil || size == 0 {
+		return nil, 0
+	}
+
+	resp = o.get(item.link, fmt.Sprintf("bytes=%d-%d", size, item.size-1))
+	return resp, 0
 }
 
 func (o *onedrive) createSession(name, dir string) (string, error) {

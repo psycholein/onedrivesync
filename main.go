@@ -32,7 +32,7 @@ func getOauth(clientid, secret, msg string) (*oauth2.Config, *oauth2.Token) {
 	conf := &oauth2.Config{
 		ClientID:     clientid,
 		ClientSecret: secret,
-		Scopes:       []string{"onedrive.readwrite"},
+		Scopes:       []string{"onedrive.readwrite", "wl.offline_access"},
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  "https://login.live.com/oauth20_authorize.srf",
 			TokenURL: "https://login.live.com/oauth20_token.srf",
