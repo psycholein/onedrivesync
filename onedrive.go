@@ -255,6 +255,9 @@ func (o *onedrive) createSession(name, dir string) (string, error) {
 	}
 	defer resp.Body.Close()
 	result, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
 
 	jsonParsed, err := gabs.ParseJSON(result)
 	if err != nil {
