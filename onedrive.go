@@ -11,6 +11,7 @@ import (
 
 	"github.com/Jeffail/gabs"
 	"github.com/pivotal-golang/bytefmt"
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -19,7 +20,8 @@ const (
 )
 
 type Onedrive struct {
-	Client *http.Client
+	Conf  *oauth2.Config
+	Token *oauth2.Token
 }
 
 type Item struct {
@@ -44,7 +46,8 @@ func (o Onedrive) submit(s string) (items []Item) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	resp, err := o.Client.Do(req)
+	client := o.Conf.Client(oauth2.NoContext, o.Token)
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -142,7 +145,8 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 	if err != nil {
 		return false
 	}
-	resp, err := o.Client.Do(req)
+	client := o.Conf.Client(oauth2.NoContext, o.Token)
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -152,11 +156,13 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 	if err != nil || len(uploadUrl) == 0 {
 		return false
 	}
-	fmt.Println("Upload:", item.Name)
+	fmt.Println("Upload:", item.Name, "Size:", item.Size)
 
 	for {
+		tries := 0
 		num, err := io.ReadAtLeast(resp.Body, buffer, chunk)
 
+	AGAIN:
 		b.Reset()
 		b.Write(buffer)
 		b.Truncate(num)
@@ -165,10 +171,11 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 			return false
 		}
 
+		client := up.Conf.Client(oauth2.NoContext, up.Token)
 		r := fmt.Sprintf("bytes %d-%d/%d", size, size+int64(num)-1, item.Size)
 		req.Header.Add("Content-Length", fmt.Sprintf("%d", num))
 		req.Header.Add("Content-Range", r)
-		res, err2 := up.Client.Do(req)
+		res, err2 := client.Do(req)
 		if err2 != nil {
 			return false
 		}
@@ -179,6 +186,11 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 		to := bytefmt.ByteSize(uint64(item.Size))
 		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.Name)
 		if res.StatusCode >= 400 {
+			if tries < 3 {
+				size -= int64(num)
+				tries++
+				goto AGAIN
+			}
 			fmt.Println(res, num, size)
 			return false
 		}
@@ -200,8 +212,9 @@ func (o Onedrive) createSession(name, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	client := o.Conf.Client(oauth2.NoContext, o.Token)
 	req.Header.Add("Content-Type", "application/json")
-	resp, err := o.Client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
