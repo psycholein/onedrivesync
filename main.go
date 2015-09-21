@@ -5,6 +5,7 @@ import (
 	"gotank/libs/yaml"
 	"io/ioutil"
 	"log"
+	"net/http"
 
 	"golang.org/x/oauth2"
 )
@@ -20,15 +21,15 @@ func main() {
 	c := config{}
 	readYaml("config.yml", &c)
 
-	downToken := getToken(c.Clientid, c.Secret, "Download")
-	upToken := getToken(c.Clientid, c.Secret, "Upload")
+	downClient := getClient(c.Clientid, c.Secret, "Download")
+	upClient := getClient(c.Clientid, c.Secret, "Upload")
 
-	down := Onedrive{downToken}
-	up := Onedrive{upToken}
-	down.SyncWith(up, c.DownDir, c.UpDir, 3)
+	down := Onedrive{downClient}
+	up := Onedrive{upClient}
+	down.SyncWith(up, c.DownDir, c.UpDir, 5)
 }
 
-func getToken(clientid, secret, msg string) string {
+func getClient(clientid, secret, msg string) *http.Client {
 	conf := &oauth2.Config{
 		ClientID:     clientid,
 		ClientSecret: secret,
@@ -49,7 +50,8 @@ func getToken(clientid, secret, msg string) string {
 	if err != nil {
 		log.Fatal(err)
 	}
-	return tok.AccessToken
+	client := conf.Client(oauth2.NoContext, tok)
+	return client
 }
 
 func readYaml(filename string, data interface{}) {

@@ -19,7 +19,7 @@ const (
 )
 
 type Onedrive struct {
-	Token string
+	Client *http.Client
 }
 
 type Item struct {
@@ -40,13 +40,11 @@ type Sync struct {
 var jobs chan Sync
 
 func (o Onedrive) submit(s string) (items []Item) {
-	client := &http.Client{}
 	req, err := http.NewRequest("GET", api+s, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	req.Header.Add("Authorization", "bearer "+o.Token)
-	resp, err := client.Do(req)
+	resp, err := o.Client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -140,13 +138,11 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 	var size int64
 	buffer := make([]byte, chunk)
 
-	client := &http.Client{}
 	req, err := http.NewRequest("GET", item.Link, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	req.Header.Add("Authorization", "bearer "+o.Token)
-	resp, err := client.Do(req)
+	resp, err := o.Client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -170,10 +166,9 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 		}
 
 		r := fmt.Sprintf("bytes %d-%d/%d", size, size+int64(num)-1, item.Size)
-		req.Header.Add("Authorization", "bearer "+up.Token)
 		req.Header.Add("Content-Length", fmt.Sprintf("%d", num))
 		req.Header.Add("Content-Range", r)
-		res, err2 := client.Do(req)
+		res, err2 := up.Client.Do(req)
 		if err2 != nil {
 			log.Fatal(err2)
 		}
@@ -184,10 +179,12 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 		to := bytefmt.ByteSize(uint64(item.Size))
 		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.Name)
 		if res.StatusCode >= 400 {
+			fmt.Println(res, num, size)
 			return false
 		}
 		if err != nil {
 			if item.Size != size {
+				fmt.Println(err, num, size)
 				return false
 			}
 			break
@@ -198,15 +195,13 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 }
 
 func (o Onedrive) createSession(name, dir string) (url string) {
-	client := &http.Client{}
 	uri := api + "/drive/root:" + dir + "/" + name + ":/upload.createSession"
 	req, err := http.NewRequest("POST", uri, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	req.Header.Add("Authorization", "bearer "+o.Token)
 	req.Header.Add("Content-Type", "application/json")
-	resp, err := client.Do(req)
+	resp, err := o.Client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
