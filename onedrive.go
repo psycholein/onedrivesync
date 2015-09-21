@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Jeffail/gabs"
@@ -19,29 +20,33 @@ const (
 	chunk = 1024 * 1024 * 10
 )
 
-type Onedrive struct {
-	Conf  *oauth2.Config
-	Token *oauth2.Token
+type onedriveItem struct {
+	name   string
+	size   int64
+	count  int
+	link   string
+	path   string
+	folder bool
 }
 
-type Item struct {
-	Name   string
-	Size   int64
-	Count  int
-	Link   string
-	Path   string
-	Folder bool
-}
-
-type Sync struct {
-	item  Item
-	up    Onedrive
+type jobItem struct {
+	item  onedriveItem
+	up    *onedrive
 	upDir string
 }
 
-var jobs chan Sync
+type onedrive struct {
+	conf  *oauth2.Config
+	token *oauth2.Token
+	jobs  chan jobItem
+	mutex *sync.Mutex
+}
 
-func (o Onedrive) get(uri, r string) *http.Response {
+func NewOnedrive(conf *oauth2.Config, token *oauth2.Token) *onedrive {
+	return &onedrive{conf: conf, token: token, mutex: &sync.Mutex{}}
+}
+
+func (o *onedrive) get(uri, r string) *http.Response {
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -49,15 +54,14 @@ func (o Onedrive) get(uri, r string) *http.Response {
 	if len(r) > 0 {
 		req.Header.Add("Range", r)
 	}
-	client := o.Conf.Client(oauth2.NoContext, o.Token)
-	resp, err := client.Do(req)
+	resp, err := o.client().Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
 	return resp
 }
 
-func (o Onedrive) submit(s string) (items []Item) {
+func (o *onedrive) submit(s string) (items []onedriveItem) {
 	resp := o.get(api+s, "")
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
@@ -80,29 +84,28 @@ func (o Onedrive) submit(s string) (items []Item) {
 		link, _ := child.Search("@content.downloadUrl").Data().(string)
 		path, _ := child.Path("parentReference.path").Data().(string)
 
-		item := Item{Name: name, Size: int64(size), Count: int(count), Link: link,
-			Path: path, Folder: count > -1}
+		item := onedriveItem{name, int64(size), int(count), link, path, count > -1}
 		items = append(items, item)
 	}
 	return
 }
 
-func (o Onedrive) Drives() []Item {
+func (o *onedrive) Drives() []onedriveItem {
 	return o.submit("/drive")
 }
 
-func (o Onedrive) Children(path string) []Item {
+func (o *onedrive) Children(path string) []onedriveItem {
 	return o.submit("/drive/root:" + path + ":/children")
 }
 
-func (o Onedrive) Mkdir(path string) {
+func (o *onedrive) Mkdir(path string) {
 }
 
-func (o Onedrive) startJobs(jobCount int) {
-	jobs = make(chan Sync)
+func (o *onedrive) startJobs(jobCount int) {
+	o.jobs = make(chan jobItem)
 	for i := 0; i < jobCount; i++ {
 		go func() {
-			for job := range jobs {
+			for job := range o.jobs {
 				for !o.syncFile(job.up, job.upDir, job.item) {
 					fmt.Println("Upload-Error! Try again in 5 seconds")
 					time.Sleep(5 * time.Second)
@@ -112,7 +115,7 @@ func (o Onedrive) startJobs(jobCount int) {
 	}
 }
 
-func (o Onedrive) SyncWith(up Onedrive, downDir, upDir string, jobCount int) {
+func (o *onedrive) SyncWith(up *onedrive, downDir, upDir string, jobCount int) {
 	items := o.Children(downDir)
 	if len(items) == 0 {
 		return
@@ -123,41 +126,48 @@ func (o Onedrive) SyncWith(up Onedrive, downDir, upDir string, jobCount int) {
 	up.Mkdir(upDir) // TODO
 	upItems := up.Children(upDir)
 	for _, item := range items {
-		if item.Folder {
+		if item.folder {
 			fmt.Println("Todo: Call SyncWith with new folder")
 		} else {
 			found := false
 			for _, upItem := range upItems {
-				if upItem.Name == item.Name && upItem.Size == item.Size {
+				if upItem.name == item.name && upItem.size == item.size {
 					found = true
 				}
 			}
 			if found {
-				fmt.Println("Online:", item.Name, item.Size)
+				fmt.Println("Online:", item.name, bytefmt.ByteSize(uint64(item.size)))
 				continue
 			}
-			jobs <- Sync{up: up, upDir: upDir, item: item}
+			o.jobs <- jobItem{up: up, upDir: upDir, item: item}
 		}
 	}
 	if jobCount > 0 {
-		close(jobs)
+		close(o.jobs)
 	}
 }
 
-func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
+func (o *onedrive) client() (client *http.Client) {
+	o.mutex.Lock()
+	client = o.conf.Client(oauth2.NoContext, o.token)
+	o.mutex.Unlock()
+	return
+}
+
+func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool {
 	var b bytes.Buffer
 	var size int64
 	buffer := make([]byte, chunk)
 
-	resp := o.get(item.Link, "")
+	resp := o.get(item.link, "")
 	defer resp.Body.Close()
 
-	uploadUrl, err := up.createSession(item.Name, upDir)
+	uploadUrl, err := up.createSession(item.name, upDir)
 	if err != nil || len(uploadUrl) == 0 {
 		fmt.Println("Session:", err, uploadUrl)
 		return false
 	}
-	fmt.Println("Upload:", item.Name, "-", bytefmt.ByteSize(uint64(item.Size)))
+	fmt.Println("Upload:", item.name, "-", bytefmt.ByteSize(uint64(item.size)))
 
 	tries := 0
 	for {
@@ -176,53 +186,50 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 			return false
 		}
 
-		client := up.Conf.Client(oauth2.NoContext, up.Token)
-		r := fmt.Sprintf("bytes %d-%d/%d", size, size+int64(num)-1, item.Size)
+		r := fmt.Sprintf("bytes %d-%d/%d", size, size+int64(num)-1, item.size)
 		req.Header.Add("Content-Length", fmt.Sprintf("%d", num))
 		req.Header.Add("Content-Range", r)
-		res, err2 := client.Do(req)
+		res, err2 := up.client().Do(req)
 		if err2 != nil {
 			fmt.Println("Do:", err2)
 			return false
 		}
+		body, _ := ioutil.ReadAll(res.Body)
 		res.Body.Close()
 
 		size += int64(num)
 		from := bytefmt.ByteSize(uint64(size))
-		to := bytefmt.ByteSize(uint64(item.Size))
-		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.Name)
+		to := bytefmt.ByteSize(uint64(item.size))
+		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.name)
 		if res.StatusCode >= 400 {
 			tries++
-			fmt.Println("Resume:", item.Name)
-			size -= int64(num)
-			resp = o.get(item.Link, fmt.Sprintf("bytes=%d-%d", size, item.Size-1))
+			fmt.Println("Resume:", item.name, "Code:", res.StatusCode, "Body:", string(body))
+			resp = o.get(item.link, fmt.Sprintf("bytes=%d-%d", size, item.size-1))
 			continue
 		}
 		if err != nil {
-			if item.Size > size {
+			if item.size > size {
 				tries++
 				fmt.Println("Error:", err, num, size)
-				size -= int64(num)
-				resp = o.get(item.Link, fmt.Sprintf("bytes=%d-%d", size, item.Size-1))
+				resp = o.get(item.link, fmt.Sprintf("bytes=%d-%d", size, item.size-1))
 				continue
 			}
 			break
 		}
 		tries = 0
 	}
-	fmt.Println(item.Name, "uploaded!")
+	fmt.Println(item.name, "uploaded!")
 	return true
 }
 
-func (o Onedrive) createSession(name, dir string) (string, error) {
+func (o *onedrive) createSession(name, dir string) (string, error) {
 	uri := api + "/drive/root:" + dir + "/" + name + ":/upload.createSession"
 	req, err := http.NewRequest("POST", uri, nil)
 	if err != nil {
 		return "", err
 	}
-	client := o.Conf.Client(oauth2.NoContext, o.Token)
 	req.Header.Add("Content-Type", "application/json")
-	resp, err := client.Do(req)
+	resp, err := o.client().Do(req)
 	if err != nil {
 		return "", err
 	}
