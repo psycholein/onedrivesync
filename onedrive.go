@@ -191,12 +191,12 @@ func (o Onedrive) syncFile(up Onedrive, upDir string, item Item) bool {
 				tries++
 				goto AGAIN
 			}
-			fmt.Println(res, num, size)
+			fmt.Println("Status:", res, tries, num, size)
 			return false
 		}
 		if err != nil {
 			if item.Size != size {
-				fmt.Println(err, num, size)
+				fmt.Println("Error:", err, num, size)
 				return false
 			}
 			break
