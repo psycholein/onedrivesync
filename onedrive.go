@@ -205,9 +205,9 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.name)
 		if err != nil || res.StatusCode >= 400 {
 			if item.size > size || res.StatusCode >= 400 {
-				fmt.Println("Error:", err, body)
+				fmt.Println("Error:", res.StatusCode, err, string(body))
 				resp.Body.Close()
-				resp, size = o.resume(up, upDir, item)
+				resp, size = o.resume(up, uploadUrl, item)
 				if size == 0 {
 					return false
 				}
@@ -237,8 +237,9 @@ func (o *onedrive) resume(up *onedrive, url string, item onedriveItem) (*http.Re
 		return nil, 0
 	}
 
+	fmt.Println("Resume-size:", size)
 	resp = o.get(item.link, fmt.Sprintf("bytes=%d-%d", size, item.size-1))
-	return resp, 0
+	return resp, size
 }
 
 func (o *onedrive) createSession(name, dir string) (string, error) {
