@@ -74,7 +74,6 @@ func (o *onedrive) submit(s string) (items []onedriveItem) {
 	if resp.StatusCode >= 400 {
 		return nil
 	}
-	fmt.Println(string(body))
 	jsonParsed, err := gabs.ParseJSON(body)
 	if err != nil {
 		log.Fatal(err)
