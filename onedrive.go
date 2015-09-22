@@ -46,6 +46,7 @@ type onedrive struct {
 	token *oauth2.Token
 	jobs  chan jobItem
 	mutex *sync.Mutex
+	wait  sync.WaitGroup
 }
 
 func NewOnedrive(conf *oauth2.Config, token *oauth2.Token) *onedrive {
@@ -151,12 +152,14 @@ func (o *onedrive) startJobs(jobCount int) {
 	o.jobs = make(chan jobItem)
 	for i := 0; i < jobCount; i++ {
 		go func() {
+			o.wait.Add(1)
 			for job := range o.jobs {
 				for !o.syncFile(job.up, job.upDir, job.item) {
 					fmt.Println("Upload-Error! Try again in 5 seconds")
 					time.Sleep(5 * time.Second)
 				}
 			}
+			o.wait.Done()
 		}()
 	}
 }
@@ -195,6 +198,7 @@ MAIN:
 	}
 	if jobCount > 0 {
 		close(o.jobs)
+		o.wait.Wait()
 	}
 }
 
