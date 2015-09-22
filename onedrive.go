@@ -84,7 +84,7 @@ func (o *onedrive) submit(s string) (items []onedriveItem) {
 			count = -1
 		}
 		path, _ := child.Path("parentReference.path").Data().(string)
-		link := api + path + "/" + name + ":/content"
+		link := api + path + "/" + name
 
 		item := onedriveItem{name, int64(size), int(count), link, path, count > -1}
 		items = append(items, item)
@@ -164,7 +164,7 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 	var size int64 = 0
 	buffer := make([]byte, chunk)
 
-	resp := o.get(item.link, "")
+	resp := o.get(item.link+":/content", "")
 	defer resp.Body.Close()
 
 	uploadUrl, err := up.createSession(item.name, upDir)
@@ -172,7 +172,7 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		fmt.Println("Session:", err, uploadUrl)
 		return false
 	}
-	fmt.Println("Upload:", item.name, "-", bytefmt.ByteSize(uint64(item.size)), resp)
+	fmt.Println("Upload:", item.name, "-", bytefmt.ByteSize(uint64(item.size)))
 
 	tries := 0
 	for {
@@ -181,17 +181,12 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 			return false
 		}
 		num, err := io.ReadAtLeast(resp.Body, buffer, chunk)
-		if num == 0 {
-			fmt.Println("Num: 0")
-			return false
-		}
 
 		b.Reset()
 		b.Write(buffer)
 		b.Truncate(num)
 		req, err2 := http.NewRequest("PUT", uploadUrl, &b)
 		if err2 != nil {
-			fmt.Println("PUT:", err2)
 			return false
 		}
 
@@ -200,7 +195,6 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		req.Header.Add("Content-Range", r)
 		res, err2 := up.client().Do(req)
 		if err2 != nil {
-			fmt.Println("Do:", err2)
 			return false
 		}
 		body, _ := ioutil.ReadAll(res.Body)
@@ -212,7 +206,7 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.name)
 		if err != nil || res.StatusCode >= 400 {
 			if item.size > size || res.StatusCode >= 400 {
-				fmt.Println("Error:", res.StatusCode, err, string(body), r)
+				fmt.Println("\nError:", res.StatusCode, err, string(body), r, "\n")
 				resp.Body.Close()
 				resp, size = o.resume(up, uploadUrl, item)
 				if size == 0 {
@@ -225,7 +219,7 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		}
 		tries = 0
 	}
-	fmt.Println(item.name, "uploaded!")
+	fmt.Println("Uploaded:", item.name)
 	return true
 }
 
@@ -244,8 +238,8 @@ func (o *onedrive) resume(up *onedrive, url string, item onedriveItem) (*http.Re
 		return nil, 0
 	}
 
-	fmt.Println("Resume-size:", size)
-	resp = o.get(item.link, fmt.Sprintf("bytes=%d-%d", size, item.size-1))
+	fmt.Println("Resume:", size)
+	resp = o.get(item.link+":/content", fmt.Sprintf("bytes=%d-%d", size, item.size-1))
 	return resp, size
 }
 
