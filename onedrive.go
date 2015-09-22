@@ -31,6 +31,7 @@ type onedriveItem struct {
 	link   string
 	path   string
 	folder bool
+	tmpUrl string
 }
 
 type jobItem struct {
@@ -50,13 +51,10 @@ func NewOnedrive(conf *oauth2.Config, token *oauth2.Token) *onedrive {
 	return &onedrive{conf: conf, token: token, mutex: &sync.Mutex{}}
 }
 
-func (o *onedrive) get(uri, r string) *http.Response {
+func (o *onedrive) get(uri string) *http.Response {
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
 		log.Fatal(err)
-	}
-	if len(r) > 0 {
-		req.Header.Add("Range", r)
 	}
 	resp, err := o.client().Do(req)
 	if err != nil {
@@ -66,7 +64,7 @@ func (o *onedrive) get(uri, r string) *http.Response {
 }
 
 func (o *onedrive) submit(s string) (items []onedriveItem) {
-	resp := o.get(api+s, "")
+	resp := o.get(api + s)
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -80,8 +78,8 @@ func (o *onedrive) submit(s string) (items []onedriveItem) {
 		log.Fatal(err)
 	}
 
-	children, _ := jsonParsed.S("value").Children()
-	if len(children) == 0 {
+	children, err := jsonParsed.S("value").Children()
+	if len(children) == 0 && err != nil {
 		children = append(children, jsonParsed)
 	}
 	for _, child := range children {
@@ -91,10 +89,12 @@ func (o *onedrive) submit(s string) (items []onedriveItem) {
 		if !ok {
 			count = -1
 		}
+		folder := count > -1
 		path, _ := child.Path("parentReference.path").Data().(string)
-		link := api + path + "/" + name
+		link := path + "/" + name
+		tmpUrl, _ := child.Search("@content.downloadUrl").Data().(string)
 
-		item := onedriveItem{name, int64(size), int(count), link, path, count > -1}
+		item := onedriveItem{name, int64(size), int(count), link, path, folder, tmpUrl}
 		items = append(items, item)
 	}
 	return
@@ -209,7 +209,7 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 	var size int64 = 0
 	buffer := make([]byte, chunk)
 
-	resp := o.get(item.link+":/content", "")
+	resp := o.get(api + item.link + ":/content")
 	defer resp.Body.Close()
 
 	uploadUrl, err := up.createSession(item.name, upDir)
@@ -269,7 +269,7 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 }
 
 func (o *onedrive) resume(up *onedrive, url string, item onedriveItem) (*http.Response, int64) {
-	resp := up.get(url, "")
+	resp := up.get(url)
 	body, _ := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 
@@ -284,7 +284,21 @@ func (o *onedrive) resume(up *onedrive, url string, item onedriveItem) (*http.Re
 	}
 
 	fmt.Println("Resume:", size)
-	resp = o.get(item.link+":/content", fmt.Sprintf("bytes=%d-%d", size, item.size-1))
+
+	links := o.submit(item.link)
+	if links == nil || len(links) == 0 {
+		return nil, 0
+	}
+
+	req, err := http.NewRequest("GET", links[0].tmpUrl, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	req.Header.Add("Range", fmt.Sprintf("bytes=%d-%d", size, item.size-1))
+	resp, err = o.client().Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
 	return resp, size
 }
 
