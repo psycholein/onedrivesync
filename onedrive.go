@@ -66,7 +66,7 @@ func (o *onedrive) get(uri string) *http.Response {
 }
 
 func (o *onedrive) submit(s string) (items []onedriveItem) {
-	resp := o.get(api + s)
+	resp := o.get(s)
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -101,15 +101,19 @@ func (o *onedrive) submit(s string) (items []onedriveItem) {
 			folder, tmpUrl, hash}
 		items = append(items, item)
 	}
+	more, ok := jsonParsed.Path("@odata.nextLink").Data().(string)
+	if ok {
+		items = append(items, o.submit(more)...)
+	}
 	return
 }
 
 func (o *onedrive) Drives() []onedriveItem {
-	return o.submit("/drive")
+	return o.submit(api + "/drive")
 }
 
 func (o *onedrive) Children(path string) []onedriveItem {
-	return o.submit("/drive/root:" + path + ":/children")
+	return o.submit(api + "/drive/root:" + path + ":/children")
 }
 
 func (o *onedrive) Mkdir(path string) error {
@@ -144,7 +148,7 @@ func (o *onedrive) Mkdir(path string) error {
 }
 
 func (o *onedrive) pathExists(path string) bool {
-	result := o.submit(path)
+	result := o.submit(api + path)
 	return result != nil && len(result) > 0 && result[0].folder
 }
 
@@ -289,7 +293,7 @@ func (o *onedrive) resume(up *onedrive, url string, item onedriveItem) (*http.Re
 
 	fmt.Println("Resume:", size)
 
-	links := o.submit(item.link)
+	links := o.submit(api + item.link)
 	if links == nil || len(links) == 0 {
 		return nil, 0
 	}
