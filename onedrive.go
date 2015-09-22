@@ -83,8 +83,8 @@ func (o *onedrive) submit(s string) (items []onedriveItem) {
 		if !ok {
 			count = -1
 		}
-		link, _ := child.Search("@content.downloadUrl").Data().(string)
 		path, _ := child.Path("parentReference.path").Data().(string)
+		link := api + path + "/" + name + ":/content"
 
 		item := onedriveItem{name, int64(size), int(count), link, path, count > -1}
 		items = append(items, item)
@@ -131,6 +131,9 @@ func (o *onedrive) SyncWith(up *onedrive, downDir, upDir string, jobCount int) {
 		if item.folder {
 			fmt.Println("Todo: Call SyncWith with new folder")
 		} else {
+			if item.size == 0 {
+				continue
+			}
 			found := false
 			for _, upItem := range upItems {
 				if upItem.name == item.name && upItem.size == item.size {
@@ -158,7 +161,7 @@ func (o *onedrive) client() (client *http.Client) {
 
 func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool {
 	var b bytes.Buffer
-	var size int64
+	var size int64 = 0
 	buffer := make([]byte, chunk)
 
 	resp := o.get(item.link, "")
@@ -169,7 +172,7 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		fmt.Println("Session:", err, uploadUrl)
 		return false
 	}
-	fmt.Println("Upload:", item.name, "-", bytefmt.ByteSize(uint64(item.size)))
+	fmt.Println("Upload:", item.name, "-", bytefmt.ByteSize(uint64(item.size)), resp)
 
 	tries := 0
 	for {
@@ -178,6 +181,10 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 			return false
 		}
 		num, err := io.ReadAtLeast(resp.Body, buffer, chunk)
+		if num == 0 {
+			fmt.Println("Num: 0")
+			return false
+		}
 
 		b.Reset()
 		b.Write(buffer)
@@ -205,7 +212,7 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.name)
 		if err != nil || res.StatusCode >= 400 {
 			if item.size > size || res.StatusCode >= 400 {
-				fmt.Println("Error:", res.StatusCode, err, string(body))
+				fmt.Println("Error:", res.StatusCode, err, string(body), r)
 				resp.Body.Close()
 				resp, size = o.resume(up, uploadUrl, item)
 				if size == 0 {
