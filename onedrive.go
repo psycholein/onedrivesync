@@ -32,6 +32,7 @@ type onedriveItem struct {
 	path   string
 	folder bool
 	tmpUrl string
+	hash   string
 }
 
 type jobItem struct {
@@ -73,6 +74,7 @@ func (o *onedrive) submit(s string) (items []onedriveItem) {
 	if resp.StatusCode >= 400 {
 		return nil
 	}
+	fmt.Println(string(body))
 	jsonParsed, err := gabs.ParseJSON(body)
 	if err != nil {
 		log.Fatal(err)
@@ -93,8 +95,10 @@ func (o *onedrive) submit(s string) (items []onedriveItem) {
 		path, _ := child.Path("parentReference.path").Data().(string)
 		link := path + "/" + name
 		tmpUrl, _ := child.Search("@content.downloadUrl").Data().(string)
+		hash, _ := child.Search("file.hashes.sha1Hash").Data().(string)
 
-		item := onedriveItem{name, int64(size), int(count), link, path, folder, tmpUrl}
+		item := onedriveItem{name, int64(size), int(count), link, path,
+			folder, tmpUrl, hash}
 		items = append(items, item)
 	}
 	return
@@ -171,23 +175,21 @@ func (o *onedrive) SyncWith(up *onedrive, downDir, upDir string, jobCount int) {
 		log.Fatal("Can't create directory")
 	}
 	upItems := up.Children(upDir)
+
+MAIN:
 	for _, item := range items {
 		if item.folder {
 			fmt.Println("Directory:", item.name)
 			o.SyncWith(up, downDir+"/"+item.name, upDir+"/"+item.name, 0)
 		} else {
-			if item.size == 0 {
-				continue
-			}
-			found := false
 			for _, upItem := range upItems {
 				if upItem.name == item.name && upItem.size == item.size {
-					found = true
+					if upItem.hash == item.hash {
+						size := bytefmt.ByteSize(uint64(item.size))
+						fmt.Println("Online:", item.name, size)
+						continue MAIN
+					}
 				}
-			}
-			if found {
-				fmt.Println("Online:", item.name, bytefmt.ByteSize(uint64(item.size)))
-				continue
 			}
 			o.jobs <- jobItem{up: up, upDir: upDir, item: item}
 		}
@@ -242,7 +244,6 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		if err2 != nil {
 			return false
 		}
-		body, _ := ioutil.ReadAll(res.Body)
 		res.Body.Close()
 
 		size += int64(num)
@@ -251,7 +252,7 @@ func (o *onedrive) syncFile(up *onedrive, upDir string, item onedriveItem) bool 
 		fmt.Println(from, "/", to, "Status:", res.StatusCode, "Name:", item.name)
 		if err != nil || res.StatusCode >= 400 {
 			if item.size > size || res.StatusCode >= 400 {
-				fmt.Println("\nError:", res.StatusCode, err, string(body), r, "\n")
+				fmt.Println("\nError:", res.StatusCode, err, r, "\n")
 				resp.Body.Close()
 				resp, size = o.resume(up, uploadUrl, item)
 				if size == 0 {
