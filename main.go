@@ -21,10 +21,11 @@ func main() {
 	readYaml("config.yml", &c)
 
 	downClient, downToken := getOauth(c.Clientid, c.Secret, "Download")
-	upClient, upToken := getOauth(c.Clientid, c.Secret, "Upload")
-
 	down := NewOnedrive(downClient, downToken)
+
+	upClient, upToken := getOauth(c.Clientid, c.Secret, "Upload")
 	up := NewOnedrive(upClient, upToken)
+
 	down.SyncWith(up, c.DownDir, c.UpDir, 5)
 }
 

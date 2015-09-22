@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 const (
 	api   = "https://api.onedrive.com/v1.0"
 	chunk = 1024 * 1024 * 10
+	mkdir = "{\"name\":\"%s\",\"folder\":{},\"@name.conflictBehavior\":\"%s\"}"
 )
 
 type onedriveItem struct {
@@ -70,12 +72,18 @@ func (o *onedrive) submit(s string) (items []onedriveItem) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if resp.StatusCode >= 400 {
+		return nil
+	}
 	jsonParsed, err := gabs.ParseJSON(body)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	children, _ := jsonParsed.S("value").Children()
+	if len(children) == 0 {
+		children = append(children, jsonParsed)
+	}
 	for _, child := range children {
 		name := child.Path("name").Data().(string)
 		size := child.Path("size").Data().(float64)
@@ -100,7 +108,40 @@ func (o *onedrive) Children(path string) []onedriveItem {
 	return o.submit("/drive/root:" + path + ":/children")
 }
 
-func (o *onedrive) Mkdir(path string) {
+func (o *onedrive) Mkdir(path string) error {
+	if path[0:1] == "/" {
+		path = path[1:]
+	}
+	pathItems := strings.Split(path, "/")
+	path = "/drive/root:"
+	for _, pathItem := range pathItems {
+		parentPath := path
+		path += "/" + pathItem
+		if !o.pathExists(path) {
+			uri := api + parentPath + ":/children"
+			body := fmt.Sprintf(mkdir, pathItem, "fail")
+			buffer := strings.NewReader(body)
+			req, err := http.NewRequest("POST", uri, buffer)
+			if err != nil {
+				return err
+			}
+			req.Header.Add("Content-Type", "application/json")
+			resp, err := o.client().Do(req)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+			if err != nil || resp.StatusCode >= 400 {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (o *onedrive) pathExists(path string) bool {
+	result := o.submit(path)
+	return result != nil && len(result) > 0 && result[0].folder
 }
 
 func (o *onedrive) startJobs(jobCount int) {
@@ -125,11 +166,15 @@ func (o *onedrive) SyncWith(up *onedrive, downDir, upDir string, jobCount int) {
 	if jobCount > 0 {
 		o.startJobs(jobCount)
 	}
-	up.Mkdir(upDir) // TODO
+	err := up.Mkdir(upDir)
+	if err != nil {
+		log.Fatal("Can't create directory")
+	}
 	upItems := up.Children(upDir)
 	for _, item := range items {
 		if item.folder {
-			fmt.Println("Todo: Call SyncWith with new folder")
+			fmt.Println("Directory:", item.name)
+			o.SyncWith(up, downDir+"/"+item.name, upDir+"/"+item.name, 0)
 		} else {
 			if item.size == 0 {
 				continue
