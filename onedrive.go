@@ -101,7 +101,7 @@ func (o *onedrive) submit(s string) (items []onedriveItem) {
 			folder, tmpUrl, hash}
 		items = append(items, item)
 	}
-	more, ok := jsonParsed.Path("@odata.nextLink").Data().(string)
+	more, ok := jsonParsed.Search("@odata.nextLink").Data().(string)
 	if ok {
 		items = append(items, o.submit(more)...)
 	}
